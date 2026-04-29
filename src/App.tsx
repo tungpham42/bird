@@ -166,10 +166,16 @@ export default function App() {
 
   // --- Game Loop (Physics & Movement) ---
   useEffect(() => {
-    let timeId: ReturnType<typeof setInterval>;
+    let reqId: number;
+    let lastTime = performance.now();
 
-    if (gameState === "PLAYING") {
-      timeId = setInterval(() => {
+    const updateLoop = (currentTime: number) => {
+      if (gameState !== "PLAYING") return;
+
+      const dt = currentTime - lastTime;
+
+      // Lock physics updates to roughly 24ms intervals (~40 FPS)
+      if (dt >= 24) {
         setBirdPos((prev) => prev + currentConfig.gravity);
 
         setPipes((prevPipes) => {
@@ -177,10 +183,19 @@ export default function App() {
             .map((pipe) => ({ ...pipe, x: pipe.x - currentConfig.pipeSpeed }))
             .filter((pipe) => pipe.x + PIPE_WIDTH > -20);
         });
-      }, 24); // ~40 FPS
+
+        // Keep the loop timing tight
+        lastTime = currentTime - (dt % 24);
+      }
+
+      reqId = requestAnimationFrame(updateLoop);
+    };
+
+    if (gameState === "PLAYING") {
+      reqId = requestAnimationFrame(updateLoop);
     }
 
-    return () => clearInterval(timeId);
+    return () => cancelAnimationFrame(reqId);
   }, [gameState, currentConfig]);
 
   // --- Pipe Spawner ---
@@ -262,7 +277,7 @@ export default function App() {
 
   // --- Controls ---
   const handleJump = useCallback(
-    (e?: React.MouseEvent | React.TouchEvent) => {
+    (e?: React.MouseEvent | React.TouchEvent | React.PointerEvent) => {
       if (e) e.preventDefault();
 
       initAudio();
@@ -307,9 +322,11 @@ export default function App() {
       <div
         className={`game-container ${gameState === "GAME_OVER" ? "game-over" : ""}`}
         ref={containerRef}
-        onMouseDown={handleJump}
-        onTouchStart={handleJump}
-        style={{ cursor: gameState === "PLAYING" ? "pointer" : "default" }}
+        onPointerDown={handleJump}
+        style={{
+          cursor: gameState === "PLAYING" ? "pointer" : "default",
+          touchAction: "none",
+        }}
       >
         {/* Floating Background Clouds */}
         <div className="clouds-container">
