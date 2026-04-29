@@ -1,0 +1,185 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap");
+
+body,
+html {
+  margin: 0;
+  padding: 0;
+  background-color: #fce8d5; /* Soft, warm page background */
+  font-family: "Plus Jakarta Sans", sans-serif;
+  overscroll-behavior: none; /* Prevents pull-to-refresh on mobile */
+  user-select: none;
+}
+
+.game-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100dvh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.game-container {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  height: 100%;
+  max-height: 850px;
+  background: linear-gradient(180deg, #ffdca8 0%, #ffac81 100%);
+  overflow: hidden;
+  box-shadow: 0 24px 48px rgba(92, 64, 51, 0.15);
+  border-radius: 32px;
+  border: 8px solid #5c4033; /* Warm dark brown frame */
+}
+
+/* Make it full screen on smaller mobile devices */
+@media (max-width: 480px) {
+  .game-container {
+    border-radius: 0;
+    border: none;
+    max-height: 100dvh;
+  }
+}
+
+/* Friendly UI Buttons */
+.btn-friendly {
+  font-family: "Plus Jakarta Sans", sans-serif;
+  border: 3px solid #5c4033;
+  padding: 14px 28px;
+  font-size: 18px;
+  font-weight: 800;
+  border-radius: 99px; /* Pill shape */
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 6px 0 #5c4033;
+  color: #fff;
+  width: 200px;
+}
+
+.btn-friendly:active {
+  transform: translateY(6px);
+  box-shadow: 0 0 0 #5c4033;
+}
+
+.btn-easy {
+  background-color: #a2d149;
+}
+.btn-medium {
+  background-color: #ffb142;
+}
+.btn-hard {
+  background-color: #ff6b6b;
+}
+.btn-action {
+  background-color: #45aaf2;
+  width: 100%;
+}
+.btn-menu {
+  background-color: #a4b0be;
+  width: 100%;
+}
+
+/* Soft Overlay Panels */
+.overlay-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(255, 250, 245, 0.95);
+  padding: 40px;
+  border-radius: 32px;
+  border: 4px solid #5c4033;
+  box-shadow: 0 12px 0 rgba(92, 64, 51, 0.1);
+  color: #5c4033;
+  width: 75%;
+  text-align: center;
+  z-index: 20;
+}
+
+.overlay-title {
+  margin: 0 0 10px 0;
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.overlay-subtitle {
+  margin: 0 0 25px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #8c6b5d;
+}
+
+.score-display {
+  position: absolute;
+  top: 40px;
+  width: 100%;
+  text-align: center;
+  font-size: 72px;
+  font-weight: 800;
+  color: #fff;
+  z-index: 10;
+  -webkit-text-stroke: 3px #5c4033;
+  text-shadow: 4px 6px 0 rgba(92, 64, 51, 0.3);
+}
+
+/* --- Clouds Background System --- */
+.clouds-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* Lets clicks pass through to the game area */
+  z-index: 1; /* Keeps clouds behind pipes, bird, and UI */
+}
+
+.cloud {
+  position: absolute;
+  left: 100%;
+  animation: floatCloud linear infinite;
+}
+
+/* Stop the clouds from drifting when the player crashes */
+.game-container.game-over .cloud {
+  animation-play-state: paused;
+}
+
+@keyframes floatCloud {
+  from {
+    left: 100%;
+  }
+  to {
+    left: -180px;
+  } /* Moves completely off the left edge */
+}
+
+/* Varied timings and sizes to make them feel organic */
+.cloud-1 {
+  top: 12%;
+  width: 110px;
+  animation-duration: 35s;
+  animation-delay: 2s;
+}
+.cloud-2 {
+  top: 28%;
+  width: 150px;
+  animation-duration: 48s;
+  animation-delay: -15s;
+} /* Negative delay spawns it already on-screen */
+.cloud-3 {
+  top: 8%;
+  width: 80px;
+  animation-duration: 60s;
+  animation-delay: -35s;
+}
+.cloud-4 {
+  top: 40%;
+  width: 100px;
+  animation-duration: 42s;
+  animation-delay: -8s;
+}
