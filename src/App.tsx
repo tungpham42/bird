@@ -2,8 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import "./App.css";
 
 // --- Global Constants ---
-const PIPE_WIDTH = 75; // Thicker, friendlier width
-const BIRD_SIZE = 44; // Cuter, larger bird
+const PIPE_WIDTH = 75;
+const BIRD_SIZE = 44;
 const BIRD_X_POSITION = 60;
 const GROUND_HEIGHT = 80;
 
@@ -11,7 +11,7 @@ type Level = "Easy" | "Medium" | "Hard";
 
 interface LevelConfig {
   gravity: number;
-  jumpHeight: number;
+  jumpStrength: number;
   pipeSpeed: number;
   pipeSpawnRate: number; // ms
   pipeGap: number;
@@ -19,23 +19,23 @@ interface LevelConfig {
 
 const LEVEL_CONFIGS: Record<Level, LevelConfig> = {
   Easy: {
-    gravity: 3,
-    jumpHeight: 60,
+    gravity: 0.2,
+    jumpStrength: -5.5,
     pipeSpeed: 3,
     pipeSpawnRate: 1800,
     pipeGap: 240,
   },
   Medium: {
-    gravity: 4,
-    jumpHeight: 70,
-    pipeSpeed: 5,
+    gravity: 0.25,
+    jumpStrength: -6.5,
+    pipeSpeed: 4.5,
     pipeSpawnRate: 1500,
     pipeGap: 180,
   },
   Hard: {
-    gravity: 5,
-    jumpHeight: 80,
-    pipeSpeed: 7,
+    gravity: 0.35,
+    jumpStrength: -7.5,
+    pipeSpeed: 6,
     pipeSpawnRate: 1100,
     pipeGap: 140,
   },
@@ -55,9 +55,18 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState>("MENU");
   const [level, setLevel] = useState<Level>("Medium");
 
-  const [birdPos, setBirdPos] = useState<number>(300);
-  const [pipes, setPipes] = useState<PipeData[]>([]);
-  const [score, setScore] = useState<number>(0);
+  // Game Engine Logic
+  const birdPosRef = useRef<number>(300);
+  const birdVelocityRef = useRef<number>(0);
+  const pipesRef = useRef<PipeData[]>([]);
+  const scoreRef = useRef<number>(0);
+
+  // Timing Refs for Delta Time
+  const lastPipeSpawnRef = useRef<number>(0);
+  const lastTimeRef = useRef<number>(0); // Tracks time between frames
+  const reqIdRef = useRef<number>(0);
+
+  const [, setRenderTick] = useState(0);
 
   const currentConfig = LEVEL_CONFIGS[level];
 
@@ -80,20 +89,14 @@ export default function App() {
     const ctx = audioCtxRef.current;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-
     osc.type = "sine";
     osc.connect(gain);
     gain.connect(ctx.destination);
-
     const now = ctx.currentTime;
-    // Quick pitch sweep up (classic jump sound)
     osc.frequency.setValueAtTime(300, now);
     osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
-
-    // Volume envelope
     gain.gain.setValueAtTime(0.3, now);
     gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-
     osc.start(now);
     osc.stop(now + 0.1);
   }, []);
@@ -103,21 +106,15 @@ export default function App() {
     const ctx = audioCtxRef.current;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-
     osc.type = "sine";
     osc.connect(gain);
     gain.connect(ctx.destination);
-
     const now = ctx.currentTime;
-    // Classic two-tone coin/score chime (B5 -> E6)
     osc.frequency.setValueAtTime(987.77, now);
     osc.frequency.setValueAtTime(1318.51, now + 0.08);
-
-    // Volume envelope
     gain.gain.setValueAtTime(0.3, now);
     gain.gain.setValueAtTime(0.3, now + 0.08);
     gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-
     osc.start(now);
     osc.stop(now + 0.3);
   }, []);
@@ -127,21 +124,14 @@ export default function App() {
     const ctx = audioCtxRef.current;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-
-    // Sawtooth provides a harsher, buzzy retro sound
     osc.type = "sawtooth";
     osc.connect(gain);
     gain.connect(ctx.destination);
-
     const now = ctx.currentTime;
-    // Descending low-frequency pitch
     osc.frequency.setValueAtTime(150, now);
     osc.frequency.exponentialRampToValueAtTime(40, now + 0.3);
-
-    // Volume envelope
     gain.gain.setValueAtTime(0.4, now);
     gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-
     osc.start(now);
     osc.stop(now + 0.3);
   }, []);
@@ -155,7 +145,8 @@ export default function App() {
           height: containerRef.current.clientHeight,
         });
         if (gameState === "MENU") {
-          setBirdPos(containerRef.current.clientHeight / 2);
+          birdPosRef.current = containerRef.current.clientHeight / 2;
+          setRenderTick((t) => t + 1);
         }
       }
     };
@@ -164,127 +155,118 @@ export default function App() {
     return () => window.removeEventListener("resize", updateSize);
   }, [gameState]);
 
-  // --- Game Loop (Physics & Movement) ---
+  // --- Unified Game Loop (Physics, Spawning & Collision) ---
   useEffect(() => {
-    let reqId: number;
-    let lastTime = performance.now();
+    if (gameState !== "PLAYING") return;
 
     const updateLoop = (currentTime: number) => {
-      if (gameState !== "PLAYING") return;
+      // 0. Calculate Delta Time (dt) to ensure smoothness regardless of monitor refresh rate
+      if (lastTimeRef.current === 0) lastTimeRef.current = currentTime;
+      let dt = currentTime - lastTimeRef.current;
 
-      const dt = currentTime - lastTime;
+      // Cap delta time to prevent physics from breaking if the user switches browser tabs
+      if (dt > 100) dt = 16.66;
+      lastTimeRef.current = currentTime;
 
-      // Lock physics updates to roughly 24ms intervals (~40 FPS)
-      if (dt >= 24) {
-        setBirdPos((prev) => prev + currentConfig.gravity);
+      // Normalize to a baseline of 60fps (16.66ms per frame)
+      const timeScale = dt / 16.66;
 
-        setPipes((prevPipes) => {
-          return prevPipes
-            .map((pipe) => ({ ...pipe, x: pipe.x - currentConfig.pipeSpeed }))
-            .filter((pipe) => pipe.x + PIPE_WIDTH > -20);
-        });
+      // 1. Áp dụng Vật lý (Scaled by Delta Time)
+      birdVelocityRef.current += currentConfig.gravity * timeScale;
 
-        // Keep the loop timing tight
-        lastTime = currentTime - (dt % 24);
+      if (birdVelocityRef.current > 8) {
+        birdVelocityRef.current = 8;
       }
 
-      reqId = requestAnimationFrame(updateLoop);
-    };
+      birdPosRef.current += birdVelocityRef.current * timeScale;
 
-    if (gameState === "PLAYING") {
-      reqId = requestAnimationFrame(updateLoop);
-    }
+      // 2. Di chuyển các ống cống (Scaled by Delta Time)
+      pipesRef.current = pipesRef.current
+        .map((pipe) => ({
+          ...pipe,
+          x: pipe.x - currentConfig.pipeSpeed * timeScale,
+        }))
+        .filter((pipe) => pipe.x + PIPE_WIDTH > -20);
 
-    return () => cancelAnimationFrame(reqId);
-  }, [gameState, currentConfig]);
-
-  // --- Pipe Spawner ---
-  useEffect(() => {
-    let pipeId: ReturnType<typeof setInterval>;
-
-    if (gameState === "PLAYING") {
-      pipeId = setInterval(() => {
+      // 3. Spawner
+      if (
+        currentTime - lastPipeSpawnRef.current >=
+        currentConfig.pipeSpawnRate
+      ) {
         const minPipeHeight = 60;
         const maxPipeHeight =
           size.height - GROUND_HEIGHT - currentConfig.pipeGap - minPipeHeight;
-
         const safeMaxHeight = Math.max(minPipeHeight, maxPipeHeight);
         const randomHeight =
           Math.floor(Math.random() * (safeMaxHeight - minPipeHeight + 1)) +
           minPipeHeight;
 
-        setPipes((prev) => [
-          ...prev,
-          { x: size.width + 50, topHeight: randomHeight, passed: false },
-        ]);
-      }, currentConfig.pipeSpawnRate);
-    }
+        pipesRef.current.push({
+          x: size.width + 50,
+          topHeight: randomHeight,
+          passed: false,
+        });
+        lastPipeSpawnRef.current = currentTime;
+      }
 
-    return () => clearInterval(pipeId);
-  }, [gameState, currentConfig, size]);
+      // 4. Phát hiện va chạm
+      const hitboxWidth = 24;
+      const hitboxHeight = 24;
 
-  // --- Collision Detection & Scoring ---
-  useEffect(() => {
-    if (gameState !== "PLAYING") return;
+      const birdLeft = BIRD_X_POSITION + (BIRD_SIZE - hitboxWidth) / 2;
+      const birdRight = birdLeft + hitboxWidth;
+      const birdTop = birdPosRef.current + (BIRD_SIZE - hitboxHeight) / 2;
+      const birdBottom = birdTop + hitboxHeight;
 
-    const birdHitboxSize = BIRD_SIZE - 8;
-    const birdCenterY = birdPos + BIRD_SIZE / 2;
+      let isGameOver = false;
 
-    const hasCollidedWithFloor =
-      birdPos + BIRD_SIZE >= size.height - GROUND_HEIGHT;
-    const hasCollidedWithCeiling = birdPos <= 0;
+      if (
+        birdPosRef.current + BIRD_SIZE >= size.height - GROUND_HEIGHT ||
+        birdPosRef.current <= 0
+      ) {
+        isGameOver = true;
+      }
 
-    if (hasCollidedWithFloor || hasCollidedWithCeiling) {
-      playCrashSound();
-      setGameState("GAME_OVER");
-      return;
-    }
+      pipesRef.current.forEach((pipe) => {
+        const inPipeHorizontalRange =
+          birdRight > pipe.x && birdLeft < pipe.x + PIPE_WIDTH;
+        const hitTopPipe = birdTop < pipe.topHeight;
+        const hitBottomPipe =
+          birdBottom > pipe.topHeight + currentConfig.pipeGap;
 
-    pipes.forEach((pipe, index) => {
-      const inPipeHorizontalRange =
-        BIRD_X_POSITION + birdHitboxSize >= pipe.x &&
-        BIRD_X_POSITION <= pipe.x + PIPE_WIDTH;
+        if (inPipeHorizontalRange && (hitTopPipe || hitBottomPipe)) {
+          isGameOver = true;
+        }
 
-      const hitTopPipe = birdCenterY - birdHitboxSize / 2 <= pipe.topHeight;
-      const hitBottomPipe =
-        birdCenterY + birdHitboxSize / 2 >=
-        pipe.topHeight + currentConfig.pipeGap;
+        if (!pipe.passed && pipe.x + PIPE_WIDTH < birdLeft) {
+          pipe.passed = true;
+          scoreRef.current += 1;
+          playScoreSound();
+        }
+      });
 
-      if (inPipeHorizontalRange && (hitTopPipe || hitBottomPipe)) {
+      if (isGameOver) {
         playCrashSound();
         setGameState("GAME_OVER");
+        return;
       }
 
-      if (!pipe.passed && pipe.x + PIPE_WIDTH < BIRD_X_POSITION) {
-        playScoreSound();
-        setScore((prev) => prev + 1);
-        setPipes((prev) => {
-          const newPipes = [...prev];
-          newPipes[index].passed = true;
-          return newPipes;
-        });
-      }
-    });
-  }, [
-    birdPos,
-    pipes,
-    gameState,
-    currentConfig,
-    size,
-    playCrashSound,
-    playScoreSound,
-  ]);
+      setRenderTick((t) => t + 1);
+      reqIdRef.current = requestAnimationFrame(updateLoop);
+    };
+
+    reqIdRef.current = requestAnimationFrame(updateLoop);
+    return () => cancelAnimationFrame(reqIdRef.current);
+  }, [gameState, currentConfig, size, playCrashSound, playScoreSound]);
 
   // --- Controls ---
   const handleJump = useCallback(
     (e?: React.MouseEvent | React.TouchEvent | React.PointerEvent) => {
       if (e) e.preventDefault();
-
       initAudio();
-
       if (gameState === "PLAYING") {
         playJumpSound();
-        setBirdPos((prev) => Math.max(prev - currentConfig.jumpHeight, 0));
+        birdVelocityRef.current = currentConfig.jumpStrength;
       }
     },
     [gameState, currentConfig, playJumpSound],
@@ -293,17 +275,20 @@ export default function App() {
   const startGame = async (selectedLevel: Level) => {
     await initAudio();
     setLevel(selectedLevel);
-    setBirdPos(size.height / 2);
-    setPipes([]);
-    setScore(0);
+    birdPosRef.current = size.height / 2;
+    birdVelocityRef.current = 0;
+    pipesRef.current = [];
+    scoreRef.current = 0;
+    lastPipeSpawnRef.current = performance.now();
+    lastTimeRef.current = performance.now(); // Reset time to prevent logic jumps
     setGameState("PLAYING");
   };
 
   const returnToMenu = () => {
     setGameState("MENU");
-    setBirdPos(size.height / 2);
-    setPipes([]);
-    setScore(0);
+    birdPosRef.current = size.height / 2;
+    pipesRef.current = [];
+    scoreRef.current = 0;
   };
 
   useEffect(() => {
@@ -330,7 +315,7 @@ export default function App() {
       >
         {/* Floating Background Clouds */}
         <div className="clouds-container">
-          {/* Cloud 1 */}
+          {/* SVG definitions remain unchanged */}
           <div className="cloud cloud-1">
             <svg viewBox="0 0 100 60" width="100%" height="100%">
               <g opacity="0.5" fill="#fff">
@@ -341,7 +326,6 @@ export default function App() {
               </g>
             </svg>
           </div>
-          {/* Cloud 2 (Flipped Horizontally for organic variety) */}
           <div className="cloud cloud-2">
             <svg
               viewBox="0 0 100 60"
@@ -357,7 +341,6 @@ export default function App() {
               </g>
             </svg>
           </div>
-          {/* Cloud 3 */}
           <div className="cloud cloud-3">
             <svg viewBox="0 0 100 60" width="100%" height="100%">
               <g opacity="0.4" fill="#fff">
@@ -368,7 +351,6 @@ export default function App() {
               </g>
             </svg>
           </div>
-          {/* Cloud 4 (Flipped Horizontally) */}
           <div className="cloud cloud-4">
             <svg
               viewBox="0 0 100 60"
@@ -386,12 +368,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* Play State UI */}
         {gameState === "PLAYING" && (
-          <div className="score-display">{score}</div>
+          <div className="score-display">{scoreRef.current}</div>
         )}
 
-        {/* Main Menu Screen */}
         {gameState === "MENU" && (
           <div className="overlay-panel">
             <h1 className="overlay-title">Softy Bird</h1>
@@ -415,11 +395,12 @@ export default function App() {
           </div>
         )}
 
-        {/* Game Over Screen */}
         {gameState === "GAME_OVER" && (
           <div className="overlay-panel">
             <h2 className="overlay-title">Oops!</h2>
-            <p className="overlay-subtitle">You scored {score} points</p>
+            <p className="overlay-subtitle">
+              You scored {scoreRef.current} points
+            </p>
             <div
               style={{
                 display: "flex",
@@ -450,19 +431,19 @@ export default function App() {
           </div>
         )}
 
-        {/* The Bird */}
+        {/* The Bird: Switched from 'top/left' to 'translate3d' for smooth hardware acceleration */}
         <div
           style={{
             position: "absolute",
-            top: birdPos,
-            left: BIRD_X_POSITION,
+            top: 0,
+            left: 0,
             width: BIRD_SIZE,
             height: BIRD_SIZE,
-            transition: "top 0.05s linear",
-            transform:
+            transform: `translate3d(${BIRD_X_POSITION}px, ${birdPosRef.current}px, 0) rotate(${
               gameState === "PLAYING"
-                ? `rotate(${currentConfig.gravity * 3}deg)`
-                : "none",
+                ? Math.min(Math.max(birdVelocityRef.current * 4, -25), 90)
+                : 0
+            }deg)`,
             zIndex: 10,
           }}
         >
@@ -515,8 +496,8 @@ export default function App() {
           </svg>
         </div>
 
-        {/* Pipes */}
-        {pipes.map((pipe, i) => {
+        {/* Pipes: Switched from 'left' to 'translate3d' for smooth hardware acceleration */}
+        {pipesRef.current.map((pipe, i) => {
           const bottomPipeHeight =
             size.height -
             pipe.topHeight -
@@ -528,10 +509,11 @@ export default function App() {
                 style={{
                   position: "absolute",
                   top: 0,
-                  left: pipe.x,
+                  left: 0,
                   width: PIPE_WIDTH,
                   height: pipe.topHeight,
-                  zIndex: 5, // Ensures it stacks above clouds but below bird
+                  transform: `translate3d(${pipe.x}px, 0, 0)`,
+                  zIndex: 5,
                 }}
               >
                 <svg width="100%" height="100%" preserveAspectRatio="none">
@@ -569,10 +551,11 @@ export default function App() {
                 style={{
                   position: "absolute",
                   top: pipe.topHeight + currentConfig.pipeGap,
-                  left: pipe.x,
+                  left: 0,
                   width: PIPE_WIDTH,
                   height: bottomPipeHeight,
-                  zIndex: 5, // Ensures it stacks above clouds but below bird
+                  transform: `translate3d(${pipe.x}px, 0, 0)`,
+                  zIndex: 5,
                 }}
               >
                 <svg width="100%" height="100%" preserveAspectRatio="none">
