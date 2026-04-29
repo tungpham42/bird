@@ -377,8 +377,8 @@ export default function App() {
         {/* Main Menu Screen */}
         {gameState === "MENU" && (
           <div className="overlay-panel">
-            <h1 className="overlay-title">Flappy!</h1>
-            <p className="overlay-subtitle">Choose your challenge</p>
+            <h1 className="overlay-title">Softy Bird</h1>
+            <p className="overlay-subtitle">Choose your level</p>
             <div
               style={{ display: "flex", flexDirection: "column", gap: "12px" }}
             >
